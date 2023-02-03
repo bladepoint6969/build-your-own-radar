@@ -22,7 +22,6 @@ const Sheet = require('./sheet')
 const ExceptionMessages = require('./exceptionMessages')
 const GoogleAuth = require('./googleAuth')
 const config = require('../config')
-const googleAuth = require('./googleAuth')
 
 const plotRadar = function (title, blips, currentRadarName, alternativeRadars) {
   if (title.endsWith('.csv')) {
@@ -107,23 +106,25 @@ const GoogleSheet = function (sheetReference, sheetName) {
   }
 
   self.authenticate = function (force = false, apiKeyEnabled, callback) {
-    GoogleAuth.loadGoogle(force, function () {
+    GoogleAuth.loadGoogle(force, async function () {
+      self.error = false
       const sheet = new Sheet(sheetReference)
-      sheet.isPublicSheet().then((isPublic) => {
-        if (!isPublic && !googleAuth.gsiInitiated) {
-          GoogleAuth.loadGSI()
-        } else {
-          sheet.processSheetResponse(sheetName, createBlipsForProtectedSheet, (error) => {
-            if (error.status === 403) {
-              plotUnauthorizedErrorMessage()
-            } else {
-              plotErrorMessage(error, 'sheet')
-            }
-          })
+      await sheet.getSheet()
+      if (sheet.sheetResponse.status == 403 && !GoogleAuth.gsiInitiated && !force) {
+        // private sheet
+        GoogleAuth.loadGSI()
+      } else {
+        await sheet.processSheetResponse(sheetName, createBlipsForProtectedSheet, (error) => {
+          if (error.status === 403) {
+            self.error = true
+            plotUnauthorizedErrorMessage()
+          } else {
+            plotErrorMessage(error, 'sheet')
+          }
+        })
+        if (callback) {
+          callback()
         }
-      })
-      if (callback) {
-        callback()
       }
     })
   }
@@ -408,6 +409,8 @@ function plotUnauthorizedErrorMessage() {
   } else {
     content = d3.select('main')
     helperDescription.style('display', 'none')
+    d3.selectAll('.loader-text').remove()
+    d3.selectAll('.error-container').remove()
   }
   const currentUser = GoogleAuth.getEmail()
   let homePageURL = window.location.protocol + '//' + window.location.hostname
@@ -434,9 +437,11 @@ function plotUnauthorizedErrorMessage() {
     var queryParams = queryString ? QueryParams(queryString[0]) : {}
     const sheet = GoogleSheet(queryParams.sheetId, queryParams.sheetName)
     sheet.authenticate(true, false, () => {
-      if (config.featureToggles.UIRefresh2022) {
+      if (config.featureToggles.UIRefresh2022 && !sheet.error) {
         helperDescription.style('display', 'block')
         errorContainer.remove()
+      } else if (config.featureToggles.UIRefresh2022 && sheet.error) {
+        helperDescription.style('display', 'none')
       } else {
         content.remove()
       }
